@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+cache/
+hydroorbit_anim/cache/
+hydroorbit_anim/data/
+hydroorbit_anim/build/
