@@ -15,58 +15,39 @@ from scipy.interpolate import PchipInterpolator
 from scipy.signal import lfilter
 
 SITE = "03451500"
+TAG = "2021mar"
+ISSUE = pd.Timestamp("2021-03-25 22:00", tz="UTC")     # forecast issue time t0 (before the peak)
+PRE_H, HORIZON = 30.0, 48.0                            # hours of history shown before t0; forecast horizon
 HERE = pathlib.Path(__file__).parent
 D, B = HERE / "data", HERE / "build"
-DT = 0.25                                   # hours
+DT = 0.25                                              # hours
 
-# ------------------------------------------------------------------ observed
-q = pd.read_csv(D / f"gauge_{SITE}_iv.csv", index_col=0, parse_dates=True).iloc[:, 0].astype(float)
+q = pd.read_csv(D / f"gauge_{SITE}_{TAG}_iv.csv", index_col=0, parse_dates=True).iloc[:, 0].astype(float)
 q.index = pd.to_datetime(q.index, utc=True)
 q = q[~q.index.duplicated()].sort_index()
+r = pd.read_csv(D / f"mrms_prcp_{SITE}_{TAG}.csv", index_col=0, parse_dates=True).iloc[:, 0].astype(float)
+r.index = pd.to_datetime(r.index, utc=True)
+RAIN_REAL = True
 
-rain_csv = D / f"mrms_prcp_{SITE}.csv"
-RAIN_REAL = rain_csv.exists()
-if RAIN_REAL:
-    r = pd.read_csv(rain_csv, index_col=0, parse_dates=True).iloc[:, 0].astype(float)
-    r.index = pd.to_datetime(r.index, utc=True)
-    # indexed at the start of each accumulation hour
-    wet = r[r > 0.5]
-    rain_start = wet.index.min()
-else:
-    rain_start = q.index[np.argmax(q.diff().rolling(8).sum().values > 5)] - pd.Timedelta(hours=12)
-
-tpk_obs = q.idxmax()
-T0 = max((min(rain_start, tpk_obs - pd.Timedelta(hours=60)) - pd.Timedelta(hours=30)).floor("6h"),
-         q.index.min().ceil("6h"))
-print(f"rain starts {rain_start}")
-T1 = (tpk_obs + pd.Timedelta(hours=84)).ceil("6h")
-H_END = (T1 - T0).total_seconds() / 3600
+T0 = ISSUE - pd.Timedelta(hours=PRE_H)                 # clock origin: hours since T0
+H_ISSUE = PRE_H
+H_END = PRE_H + HORIZON
 T = np.arange(0, H_END + DT / 2, DT)
-times = T0 + pd.to_timedelta(T, unit="h")
-
-qe = q[(q.index >= T0 - pd.Timedelta(hours=3)) & (q.index <= T1 + pd.Timedelta(hours=3))]
+hrs = lambda idx: ((idx - T0).total_seconds() / 3600).values
+qe = q[(q.index >= T0 - pd.Timedelta(hours=3)) & (q.index <= T0 + pd.Timedelta(hours=H_END + 3))]
 gaps = qe.index.to_series().diff().dt.total_seconds().div(3600)
-print(f"window {T0} -> {T1} ({H_END:.0f} h); obs records {len(qe)}, longest gap {gaps.max():.2f} h")
+print(f"window {T0} -> {T0 + pd.Timedelta(hours=H_END)} ({H_END:.0f} h); issue at +{H_ISSUE:.0f} h; "
+      f"obs records {len(qe)}, longest gap {gaps.max():.2f} h")
 assert gaps.max() <= 2.0, "observed discharge has a gap > 2 h"
-hrs = lambda idx: ((idx - T0).total_seconds() / 3600).values   # (index units vary: us vs ns)
 QOBS = np.interp(T, hrs(qe.index), qe.values)
 ipk = int(QOBS.argmax())
-print(f"observed peak {QOBS[ipk]:.0f} m3/s at {times[ipk]} (+{T[ipk]:.1f} h)")
-
-# ------------------------------------------------------------------ rain (mm/h, basin mean)
-if RAIN_REAL:
-    rh = r.reindex(pd.date_range(T0.floor("h"), T1, freq="h", tz="UTC")).fillna(0.0)
-    RAIN = np.interp(T, (rh.index - T0).total_seconds() / 3600 + 0.5, rh.values, left=0, right=0)
-    RAIN_HOURLY_T = ((rh.index - T0).total_seconds() / 3600).values
-    RAIN_HOURLY = rh.values
-else:
-    # illustrative: two bursts that end before the main rising limb
-    tp = T[ipk]
-    RAIN = 6 * np.exp(-0.5 * ((T - (tp - 40)) / 5) ** 2) + 14 * np.exp(-0.5 * ((T - (tp - 12)) / 4) ** 2)
-    RAIN_HOURLY_T = np.arange(0, H_END, 1.0)
-    RAIN_HOURLY = np.interp(RAIN_HOURLY_T + 0.5, T, RAIN)
-print(f"rain ({'MRMS' if RAIN_REAL else 'illustrative'}): total {RAIN.sum() * DT:.0f} mm, "
-      f"max {RAIN.max():.1f} mm/h")
+print(f"observed peak {QOBS[ipk]:.0f} m3/s at {T0 + pd.Timedelta(hours=T[ipk])} (+{T[ipk] - H_ISSUE:.1f} h after issue)")
+rh = r.reindex(pd.date_range(T0.floor("h"), T0 + pd.Timedelta(hours=H_END), freq="h", tz="UTC")).fillna(0.0)
+RAIN_HOURLY_T = hrs(rh.index)
+RAIN_HOURLY = rh.values
+RAIN = np.interp(T, RAIN_HOURLY_T + 0.5, RAIN_HOURLY, left=0, right=0)
+rain_start = rh[rh > 0.5].index.min()
+print(f"rain (MRMS): total {RAIN.sum() * DT:.0f} mm, max {RAIN.max():.1f} mm/h, starts {rain_start}")
 
 # ------------------------------------------------------------------ routing
 cr = np.load(B / "catch_rivers.npz")
@@ -110,7 +91,7 @@ def outlet(R, c):
 base = np.minimum.accumulate(QOBS[::-1])[::-1]                     # rising-limb baseflow envelope
 base = np.minimum(base, np.interp(T, [0, H_END], [QOBS[0], QOBS[-1]]))
 best = None
-for c in (2.0, 3.0, 4.0, 5.5, 7.0, 9.0, 12.0):    # km/h
+for c in (3.0, 5.5, 9.0, 12.0, 16.0, 22.0, 30.0):    # km/h
     for S in (60, 100, 150, 220, 320, 450):        # mm
         for kf in (1.5, 3.0, 5.0, 8.0, 12.0):      # h
             for frac in (0.5, 0.7, 0.85, 1.0):
@@ -149,63 +130,48 @@ QN = (QB - QB.min(1, keepdims=True)) / (np.ptp(QB, 1, keepdims=True) + 1e-9)
 io = int(cr["out_i"])
 print(f"outlet reach peak at +{T[QN[io].argmax()]:.1f} h (observed +{T[ipk]:.1f} h)")
 
-# ------------------------------------------------------------------ illustrative rolling forecast
-HORIZON = 48.0
-ISSUES = np.arange(0, H_END + 1e-6, 1.0)                           # hourly issues
+# ------------------------------------------------------------------ synthetic forecast (one issue, never revised)
+# Built once at t0 from the observed series with FIXED errors (peak 9 % low and 1.5 h late, slightly slow recession).
+# Only the observations up to t0 are "known"; everything after t0 is the synthetic prediction.
+tt = T[T >= H_ISSUE - 1e-9]
+lead = tt - H_ISSUE
+w = 1 - np.exp(-lead / 4.0)
+qf = np.interp(tt - 1.5 * w, T, QOBS) * (1 - 0.09 * w) * (1 + 0.06 * (lead / HORIZON) ** 1.5 * w)
+q0 = np.interp(H_ISSUE, T, QOBS)
+qf = qf + (q0 - qf[0]) * np.exp(-lead / 2.0)
+FC_T, FC_Q = tt, qf
+ipf = int(qf.argmax())
+print(f"synthetic forecast peak {qf[ipf]:.0f} m3/s at +{lead[ipf]:.1f} h after issue (illustrative; no skill claimed)")
 
-
-def forecast(t0):
-    tt = np.arange(t0, min(t0 + HORIZON, H_END) + 1e-6, DT)
-    lead = tt - t0
-    w = 1 - np.exp(-lead / 9.0)
-    tp = T[ipk]
-    stage = np.clip((t0 - (tp - 60)) / 50.0, 0, 1)                  # skill improves as the storm is observed
-    late = 3.0 * (1 - stage) ** 1.5 + 0.6                           # hours late
-    mag = -0.18 * (1 - stage) ** 1.2 + 0.04                         # relative magnitude error
-    qf = np.interp(tt - late * w, T, QOBS) * (1 + mag * w)
-    q0 = np.interp(t0, T, QOBS)
-    qf = qf + (q0 - qf[0]) * np.exp(-lead / 3.0)
-    spread = (0.08 + 0.32 * (1 - stage)) * w
-    return tt, qf, qf * (1 - spread), qf * (1 + 1.15 * spread)
-
-
-lead_trace = np.array([np.interp(t, *forecast(max(t - 6.0, 0))[:2]) for t in T])
-ipl = int(lead_trace.argmax())
-peak_err = (lead_trace[ipl] - QOBS[ipk]) / QOBS[ipk] * 100
-timing_err = T[ipl] - T[ipk]
-print(f"illustrative 6-h lead: peak error {peak_err:+.1f} %, timing error {timing_err:+.2f} h")
+pd.DataFrame({
+    "time_utc": (T0 + pd.to_timedelta(T, unit="h")).strftime("%Y-%m-%d %H:%M"),
+    "hours_after_issue": np.round(T - H_ISSUE, 2),
+    "observed_streamflow_m3s": np.round(QOBS, 1),
+    "synthetic_forecast_m3s": np.round(np.interp(T, FC_T, FC_Q, left=np.nan, right=np.nan), 1),
+    "mrms_rain_mm_h": np.round(RAIN, 2),
+}).to_csv(HERE / "out" / "hydrograph_data.csv", index=False)
 
 # ------------------------------------------------------------------ video clock (PCHIP)
-# storm scenes run 12 s -> 33 s; slow through the rising limb and the peak, fast in recession
+# 0-11 s static context; 11-18 s storm builds up to the issue time; 18-27 s clock holds at t0 (forecast issued);
+# 27-34 s the event plays out (slow through the peak, faster in the recession); 34-40 s held at the end.
 tp = T[ipk]
-rise = T[np.argmax(QOBS > QOBS[0] + 0.15 * (QOBS[ipk] - QOBS[0]))]
-rs = (rain_start - T0).total_seconds() / 3600
-knots_t = [12.0, 13.5, 17.0, 20.0, 24.0, 26.5, 33.0]
-knots_h = [0.0, tp - 77, tp - 27, tp - 11, tp, tp + 11, H_END]
-assert np.all(np.diff(knots_h) > 0), knots_h
-print("clock knots", list(zip(knots_t, np.round(knots_h, 1))))
+knots_t = [11.0, 14.0, 18.0, 27.0, 29.0, 30.6, 32.0, 34.0, 40.0]
+knots_h = [rain_start_h := float((rain_start - T0).total_seconds() / 3600) - 3, H_ISSUE - 5.0, H_ISSUE, H_ISSUE,
+           H_ISSUE + 5.0, tp + 2.0, tp + 14.0, H_END, H_END]
+assert np.all(np.diff(knots_t) > 0) and np.all(np.diff(knots_h) >= 0), knots_h
+print("clock knots", [(a, round(b, 1)) for a, b in zip(knots_t, knots_h)])
 
 np.savez_compressed(
-    B / "hydro.npz", T=T, t0_ns=np.int64(T0.value), RAIN=RAIN, RAIN_HT=RAIN_HOURLY_T, RAIN_H=RAIN_HOURLY,
-    QOBS=QOBS, QMOD=qmod, QN=QN.astype(np.float16), RUNOFF=R, LEAD=lead_trace, H_END=H_END,
-    ipk=ipk, ipl=ipl, peak_err=peak_err, timing_err=timing_err, clock_t=knots_t, clock_h=knots_h,
-    rain_real=RAIN_REAL, C=C, KH=KH,
-    FC_T=np.stack([np.pad(forecast(t)[0], (0, int(HORIZON / DT) + 1 - forecast(t)[0].size), constant_values=np.nan) for t in ISSUES]),
-    FC_Q=np.stack([np.pad(forecast(t)[1], (0, int(HORIZON / DT) + 1 - forecast(t)[1].size), constant_values=np.nan) for t in ISSUES]),
-    FC_LO=np.stack([np.pad(forecast(t)[2], (0, int(HORIZON / DT) + 1 - forecast(t)[2].size), constant_values=np.nan) for t in ISSUES]),
-    FC_HI=np.stack([np.pad(forecast(t)[3], (0, int(HORIZON / DT) + 1 - forecast(t)[3].size), constant_values=np.nan) for t in ISSUES]),
-    ISSUES=ISSUES)
+    B / "hydro.npz", T=T, t0_ns=np.int64(T0.as_unit("ns").value), RAIN=RAIN, RAIN_HT=RAIN_HOURLY_T, RAIN_H=RAIN_HOURLY,
+    QOBS=QOBS, QMOD=qmod, QN=QN.astype(np.float16), RUNOFF=R, H_END=H_END, H_ISSUE=H_ISSUE, ipk=ipk,
+    FC_T=FC_T, FC_Q=FC_Q, clock_t=knots_t, clock_h=knots_h, rain_real=RAIN_REAL, C=C, KH=KH)
 
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 fig, ax = plt.subplots(figsize=(12, 5))
-ax.plot(T, QOBS, "k", label="observed (NWIS)")
-ax.plot(T, qmod, "C1", label="routed model (animation)")
-ax.plot(T, lead_trace, "c", label="illustrative 6-h lead")
-for t0 in (tp - 40, tp - 20, tp - 8):
-    tt, qf, lo, hi = forecast(t0)
-    ax.fill_between(tt, lo, hi, alpha=0.12); ax.plot(tt, qf, lw=1)
-ax2 = ax.twinx(); ax2.bar(T, RAIN, width=DT, color="b", alpha=0.3); ax2.set_ylim(RAIN.max() * 4, 0)
-for i in np.argsort(-area)[[50, 400]]:
-    ax.plot(T, QN[i] * QOBS.max() * 0.5, ":", lw=1)
-ax.legend(); plt.savefig(B / "hydro_preview.png", dpi=70)
+ax.plot(T - H_ISSUE, QOBS, "k", label="observed (NWIS)")
+ax.plot(T - H_ISSUE, qmod, "C1", label="routed model (map animation)")
+ax.plot(FC_T - H_ISSUE, FC_Q, "c", label="synthetic forecast")
+ax.axvline(0, color="r"); ax.legend()
+ax2 = ax.twinx(); ax2.bar(T - H_ISSUE, RAIN, width=DT, color="b", alpha=0.3); ax2.set_ylim(RAIN.max() * 4, 0)
+plt.savefig(B / "hydro_preview.png", dpi=70)

@@ -13,8 +13,9 @@ warnings.filterwarnings("ignore")
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--site", default="03451500")
-ap.add_argument("--start", default="2024-09-23")
-ap.add_argument("--end", default="2024-10-02")
+ap.add_argument("--tag", default="2021mar", help="event tag used in output file names")
+ap.add_argument("--start", default="2021-03-19")
+ap.add_argument("--end", default="2021-04-03")
 a = ap.parse_args()
 
 import pygeohydro as gh
@@ -115,11 +116,11 @@ if p := step("tn_dem_120m.tif"):
 if p := step(f"catch_{a.site}_dem_30m.tif"):
     save_dem(gpd.read_file(D / f"catch_{a.site}.geojson"), 4000, 30, p)
 
-if p := step(f"gauge_{a.site}_iv.csv"):
+if p := step(f"gauge_{a.site}_{a.tag}_iv.csv"):
     q = gh.NWIS().get_streamflow(a.site, (a.start, a.end), freq="iv")   # m3/s, UTC
     q.to_csv(p)
 
-if p := step(f"mrms_prcp_{a.site}.csv"):
+if p := step(f"mrms_prcp_{a.site}_{a.tag}.csv"):
     # Hourly NOAA MRMS MultiSensor QPE (Pass 2, radar + gauges, ~1 km) from the public AWS
     # archive, cropped to the catchment. (NLDAS-2 data rods were retired in 2025.)
     # Each file is the 1-h accumulation ending at its timestamp.
@@ -161,7 +162,7 @@ if p := step(f"mrms_prcp_{a.site}.csv"):
     m = features.rasterize([(cpoly, 1)], out_shape=grid.shape[1:], transform=tr).astype(bool)
     s = pd.Series(grid[:, m].mean(1), index=hours - pd.Timedelta(hours=1), name="prcp_mm_h")  # hour start
     s.to_csv(p)
-    np.savez_compressed(D / f"mrms_grid_{a.site}.npz", rain=grid, lat=lat, lon=lon,
+    np.savez_compressed(D / f"mrms_grid_{a.site}_{a.tag}.npz", rain=grid, lat=lat, lon=lon,
                         t_start_ns=(hours - pd.Timedelta(hours=1)).as_unit("ns").asi8, mask=m)
     print(f"    MRMS basin-mean total {s.sum():.0f} mm, max {s.max():.1f} mm/h at {s.idxmax()}")
 print("done")

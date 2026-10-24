@@ -10,4 +10,4 @@ for a in $(seq 0 150 1050); do
   $PY render.py --frames $a:$b --out $f >> build/render_log.txt 2>&1 && touch "$f.done" || { echo "chunk $a failed" >> build/render_log.txt; exit 1; }
 done
 for f in build/chunks/c*.mp4; do echo "file '$PWD/$f'"; done > build/chunks/list.txt
-$FF -y -loglevel error -f concat -safe 0 -i build/chunks/list.txt -c copy -movflags +faststart out/hydroorbit_booth.mp4 && echo "ALLDONE" >> build/render_log.txt
+$FF -y -loglevel error -f concat -safe 0 -i build/chunks/list.txt -c copy -movflags +faststart out/hydroorbit_booth_v2.mp4 && echo "ALLDONE" >> build/render_log.txt
