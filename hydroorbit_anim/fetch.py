@@ -2,8 +2,9 @@
 """Fetch all real data for the HydroORBIT booth animation into data/.
 
 Adapted from hydroorbit_video_kit/fetch_tennessee_data.py: same basin layers, but the
-zoom catchment is the gauge's own NLDI upstream basin, and the discharge/rain windows
-are the chosen event. Each step is skipped if its output already exists.
+zoom catchment is the drainage area above the focus dam (Douglas Dam, French Broad), the
+headwater gauge supplies the observed hydrograph, and the discharge/rain windows are the
+chosen event. Each step is skipped if its output already exists.
 """
 import argparse, pathlib, warnings
 import numpy as np
@@ -12,7 +13,11 @@ import geopandas as gpd
 warnings.filterwarnings("ignore")
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--site", default="03451500")
+ap.add_argument("--site", default="03451500", help="headwater gauge for the hydrograph")
+ap.add_argument("--dam", default="Douglas Dam", help="NID name of the focus dam (zoom catchment outlet)")
+ap.add_argument("--inflow", default="03454500,03461500,03467609",
+                help="USGS gauges just upstream of the reservoir whose sum is the observed inflow "
+                     "(French Broad at Hot Springs, Pigeon at Newport, Nolichucky near Lowland)")
 ap.add_argument("--tag", default="2021mar", help="event tag used in output file names")
 ap.add_argument("--start", default="2021-03-19")
 ap.add_argument("--end", default="2021-04-03")
@@ -64,24 +69,44 @@ def nhd_flowlines():
     return fl
 
 
+
+# Hydropower dams in the basin from the National Inventory of Dams (USACE), excluding saddle dams,
+# spillways and dikes that are listed as separate structures of the same project.
+if p := step("tn_dams.geojson"):
+    import io, urllib.request
+    n = pd.read_csv(io.BytesIO(urllib.request.urlopen("https://nid.sec.usace.army.mil/api/nation/csv", timeout=600).read()),
+                    skiprows=1, low_memory=False)
+    g = gpd.GeoDataFrame(n, geometry=gpd.points_from_xy(n.Longitude, n.Latitude), crs=4326)
+    g = g[g.within(gpd.read_file(D / "tn_basin.geojson").to_crs(4326).union_all())]
+    g = g[g.Purposes.fillna("").str.contains("Hydroelectric")]
+    g = g[~g["Dam Name"].str.contains("Saddle|Spillway|Dike|Weir|Fuse|Auxil", case=False)]
+    g = g[g["NID Storage (Acre-Ft)"].fillna(0) > 0]
+    g = g.rename(columns={"Dam Name": "name", "Owner Names": "owner", "River or Stream Name": "river",
+                          "NID Storage (Acre-Ft)": "storage_acft", "NID Height (Ft)": "height_ft", "NID ID": "nid_id"})
+    g[["name", "nid_id", "owner", "river", "height_ft", "storage_acft", "geometry"]].to_file(p, driver="GeoJSON")
+    print(f"    hydropower dams {len(g)}")
+
 KEEP = KEEP + ["pathlength", "lengthkm"]
-if (p := step("tn_flowlines.gpkg")) or not (D / f"catch_{a.site}.geojson").exists():
+TAG_C = a.dam.lower().replace(" dam", "").replace(" ", "_")
+if (p := step("tn_flowlines.gpkg")) or not (D / f"catch_{TAG_C}.geojson").exists():
     fl = nhd_flowlines()
     if p:
         f = fl[fl.streamorde >= 3]
         gpd.GeoDataFrame(f[[c for c in KEEP if c in f.columns]]).to_file(p, driver="GPKG")
         print("    basin flowlines (order >= 3)", len(f))
 
-    # gauge location from NWIS; snap to the nearest named reach of the river
+    # gauge location from NWIS
     info = gh.NWIS().get_info({"site": a.site})
     gpt = gpd.GeoSeries.from_xy(info.dec_long_va, info.dec_lat_va, crs=4269).to_crs(fl.crs)
-    river = info.station_nm.iloc[0].split(" At ")[0].split(" at ")[0].upper()
-    cand = fl[fl.gnis_name.fillna("").str.upper() == river]
-    d = cand.distance(gpt.iloc[0])
+    gpt.to_frame("geometry").assign(site=a.site).to_file(D / f"gauge_{a.site}.geojson", driver="GeoJSON")
+    # focus dam from the NID; snap to the nearest reach of the named river
+    dams = gpd.read_file(D / "tn_dams.geojson").to_crs(fl.crs)
+    dam = dams[dams.name == a.dam].iloc[0]
+    cand = fl[fl.gnis_name.fillna("").str.upper() == dam.river.split(" - ")[0].strip().upper()]
+    d = cand.distance(dam.geometry)
     g0 = cand.loc[d.idxmin()]
-    print(f"    gauge reach comid {g0.comid}, {d.min():.0f} m from gauge, {g0.totdasqkm:.0f} km2")
-    # everything upstream: follow dnhydroseq links back from the gauge reach
-    dn = fl.set_index("hydroseq").dnhydroseq
+    print(f"    dam reach comid {g0.comid}, {d.min():.0f} m from {a.dam}, {g0.totdasqkm:.0f} km2")
+    # everything upstream: follow dnhydroseq links back from the dam reach
     up = {g0.hydroseq}
     children = fl.groupby("dnhydroseq").hydroseq.apply(list).to_dict()
     stack = [g0.hydroseq]
@@ -91,19 +116,32 @@ if (p := step("tn_flowlines.gpkg")) or not (D / f"catch_{a.site}.geojson").exist
                 up.add(c); stack.append(c)
     cf = fl[fl.hydroseq.isin(up)]
     print("    upstream reaches", len(cf))
-    gpd.GeoDataFrame(cf[[c for c in KEEP if c in cf.columns]]).to_file(D / f"catch_{a.site}_flowlines.gpkg", driver="GPKG")
+    gpd.GeoDataFrame(cf[[c for c in KEEP if c in cf.columns]]).to_file(D / f"catch_{TAG_C}_flowlines.gpkg", driver="GPKG")
     cat = gpd.read_file(NP / "NHDPlusCatchment/Catchment.shp")
     cat.columns = [c.lower() if c != "geometry" else c for c in cat.columns]
     cat = cat[cat.featureid.isin(cf.comid)]
     poly = cat.to_crs(CRS).buffer(1).union_all().buffer(-1)
-    gpd.GeoDataFrame({"site": [a.site]}, geometry=[poly], crs=CRS).to_file(D / f"catch_{a.site}.geojson", driver="GeoJSON")
-    gpt.to_frame("geometry").assign(site=a.site).to_file(D / f"gauge_{a.site}.geojson", driver="GeoJSON")
-    print(f"    upstream basin {poly.area/1e6:.0f} km2 (NHDPlus totdasqkm at gauge reach {g0.totdasqkm:.0f})")
+    gpd.GeoDataFrame({"dam": [a.dam]}, geometry=[poly], crs=CRS).to_file(D / f"catch_{TAG_C}.geojson", driver="GeoJSON")
+    gpd.GeoDataFrame({"name": [a.dam]}, geometry=[dam.geometry], crs=fl.crs).to_file(D / f"dam_{TAG_C}.geojson", driver="GeoJSON")
+    print(f"    upstream basin {poly.area/1e6:.0f} km2 (NHDPlus totdasqkm at dam reach {g0.totdasqkm:.0f})")
+
+# Lakes and reservoirs (NHDPlusV2 NHDWaterbody), >= 1 km2, for the water surfaces on both meshes
+if p := step("tn_reservoirs.gpkg"):
+    wb = gpd.read_file(NP / "NHDSnapshot/Hydrography/NHDWaterbody.shp")
+    wb.columns = [c.lower() if c != "geometry" else c for c in wb.columns]
+    wb = wb[wb.ftype.isin(["LakePond", "Reservoir"]) & (wb.areasqkm >= 1.0)]
+    from shapely import force_2d
+    wb["geometry"] = force_2d(wb.geometry)
+    wb[["comid", "gnis_name", "ftype", "areasqkm", "geometry"]].to_crs(CRS).to_file(p, driver="GPKG")
+    print(f"    waterbodies >= 1 km2: {len(wb)}")
 
 
 def save_dem(gdf, buf_m, res, path):
     geom = gdf.to_crs(CRS).buffer(buf_m).to_crs(4326).union_all()
-    dem = py3dep.get_dem(geom, res, crs=4326)
+    try:
+        dem = py3dep.get_dem(geom, res, crs=4326)
+    except Exception:                       # no static 3DEP product at this resolution
+        dem = py3dep.get_map("DEM", geom, res, geo_crs=4326, crs=CRS)
     dem = dem.rio.reproject(CRS, resolution=res)
     dem = dem.where(np.isfinite(dem), -9999).round().astype("int16")
     dem.rio.write_nodata(-9999, inplace=True)
@@ -113,14 +151,14 @@ def save_dem(gdf, buf_m, res, path):
 
 if p := step("tn_dem_120m.tif"):
     save_dem(gpd.read_file(D / "tn_basin.geojson"), 8000, 120, p)
-if p := step(f"catch_{a.site}_dem_30m.tif"):
-    save_dem(gpd.read_file(D / f"catch_{a.site}.geojson"), 4000, 30, p)
+if p := step(f"catch_{TAG_C}_dem_60m.tif"):
+    save_dem(gpd.read_file(D / f"catch_{TAG_C}.geojson"), 6000, 60, p)
 
 if p := step(f"gauge_{a.site}_{a.tag}_iv.csv"):
     q = gh.NWIS().get_streamflow(a.site, (a.start, a.end), freq="iv")   # m3/s, UTC
     q.to_csv(p)
 
-if p := step(f"mrms_prcp_{a.site}_{a.tag}.csv"):
+if p := step(f"mrms_prcp_{TAG_C}_{a.tag}.csv"):
     # Hourly NOAA MRMS MultiSensor QPE (Pass 2, radar + gauges, ~1 km) from the public AWS
     # archive, cropped to the catchment. (NLDAS-2 data rods were retired in 2025.)
     # Each file is the 1-h accumulation ending at its timestamp.
@@ -129,7 +167,7 @@ if p := step(f"mrms_prcp_{a.site}_{a.tag}.csv"):
     import pygrib
     from rasterio import features
     from rasterio.transform import from_origin
-    cpoly = gpd.read_file(D / f"catch_{a.site}.geojson").to_crs(4326).union_all()
+    cpoly = gpd.read_file(D / f"catch_{TAG_C}.geojson").to_crs(4326).union_all()
     lo0, la0, lo1, la1 = cpoly.buffer(0.15).bounds
     hours = pd.date_range(a.start, a.end, freq="h", tz="UTC")
     MR = "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/MultiSensor_QPE_01H_Pass2_00.00"
@@ -162,7 +200,21 @@ if p := step(f"mrms_prcp_{a.site}_{a.tag}.csv"):
     m = features.rasterize([(cpoly, 1)], out_shape=grid.shape[1:], transform=tr).astype(bool)
     s = pd.Series(grid[:, m].mean(1), index=hours - pd.Timedelta(hours=1), name="prcp_mm_h")  # hour start
     s.to_csv(p)
-    np.savez_compressed(D / f"mrms_grid_{a.site}_{a.tag}.npz", rain=grid, lat=lat, lon=lon,
+    np.savez_compressed(D / f"mrms_grid_{TAG_C}_{a.tag}.npz", rain=grid, lat=lat, lon=lon,
                         t_start_ns=(hours - pd.Timedelta(hours=1)).as_unit("ns").asi8, mask=m)
     print(f"    MRMS basin-mean total {s.sum():.0f} mm, max {s.max():.1f} mm/h at {s.idxmax()}")
+# Reservoir inflow gauges: locations, event series (15 min) and the hourly record since WY2012
+# (common period of all three) for the flood thresholds
+INFLOW = a.inflow.split(",")
+if p := step("inflow_gauges.geojson"):
+    info = gh.NWIS().get_info({"site": ",".join(INFLOW)}).drop_duplicates("site_no")
+    gpd.GeoDataFrame(info[["site_no", "station_nm"]], crs=4269,
+                     geometry=gpd.points_from_xy(info.dec_long_va, info.dec_lat_va)).to_file(p, driver="GeoJSON")
+if p := step(f"inflow3_{a.tag}_iv.csv"):
+    gh.NWIS().get_streamflow(INFLOW, (a.start, a.end), freq="iv").to_csv(p)
+if p := step("inflow3_iv_hourly.csv"):
+    out = []
+    for y in range(2012, 2026):
+        out.append(gh.NWIS().get_streamflow(INFLOW, (f"{y-1}-10-01", f"{y}-09-30"), freq="iv").resample("h").mean())
+    pd.concat(out).to_csv(p)
 print("done")
