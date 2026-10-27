@@ -5,7 +5,7 @@ PY=../.venv/bin/python
 FF=$($PY -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
 OUT=${OUT:-out/hydroorbit_booth_v3.mp4}
 JOBS=${JOBS:-1}                    # 2 parallel renderers run out of memory on a 8 GB machine
-N=${N:-1410}                       # 47 s x 30 fps
+N=${N:-1635}                       # 54.5 s x 30 fps
 mkdir -p build/chunks
 chunk() {
   a=$1; b=$((a+150)); [ $b -gt $N ] && b=$N; f=$(printf "build/chunks/c%04d.mp4" $a)

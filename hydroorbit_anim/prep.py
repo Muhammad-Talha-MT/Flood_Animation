@@ -16,7 +16,7 @@ from scipy import ndimage as ndi
 from shapely.geometry import Point
 warnings.filterwarnings("ignore")
 
-SITE = "03451500"                 # headwater gauge (hydrograph)
+SITE = "03455000"                 # gauge for the hydrograph: French Broad near Newport, TN
 CATCH = "douglas"                 # zoom catchment: drainage above the focus dam
 HERE = pathlib.Path(__file__).parent
 D, B = HERE / "data", HERE / "build"
@@ -30,7 +30,6 @@ damg = gpd.read_file(D / f"dam_{CATCH}.geojson").to_crs(CRS)
 BPOLY, CPOLY = basin.union_all(), catch.union_all()
 GXY = np.array(gauge.geometry.iloc[0].coords[0])
 DXY = np.array(damg.geometry.iloc[0].coords[0])
-inflow = gpd.read_file(D / "inflow_gauges.geojson").to_crs(CRS)        # reservoir inflow gauges (USGS)
 # reservoirs (NHDPlus waterbodies >= 1 km2) and hydropower dams (NID)
 lakes = gpd.read_file(D / "tn_reservoirs.gpkg").to_crs(CRS)
 lakes = lakes[~lakes.gnis_name.fillna("").str.contains("historical")]
@@ -322,7 +321,7 @@ np.savez_compressed(B / "routing.npz", dirs=dirs, acc=acc.reshape(h, w).astype(n
                     z=(ndi.gaussian_filter(zr, 1.0) / 1000).astype(np.float32))
 DKM = np.array([km(np.c_[rxs[gc], rys[gr]])[0, 0], km(np.c_[rxs[gc], rys[gr]])[0, 1]])
 GKM = km(GXY[None])[0]
-IXY = km(np.c_[inflow.geometry.x, inflow.geometry.y])
+IXY = km(GXY[None])                                   # the gauge (kept as a 1-row array)
 
 # ---------- catchment flowlines: topology + flow distance to gauge
 print("catchment flowlines", len(cfl))
@@ -374,7 +373,7 @@ np.savez_compressed(B / "catch.npz", z=(zc / 1000).astype(np.float32), xs=km(np.
                     tex_ys=km(np.c_[cys30, cys30])[:, 1], basin_hole=hole, gauge=GKM.astype(np.float32),
                     gauge_z=np.float32(zc_s(GKM[:1], GKM[1:])[0]), dam=DKM.astype(np.float32),
                     inflow_xy=IXY.astype(np.float32), inflow_z=zc_s(IXY[:, 0], IXY[:, 1]).astype(np.float32),
-                    inflow_site=inflow.site_no.values.astype("U16"),
+                    inflow_site=np.array([SITE]),
                     dam_z=np.float32(zc_s(DKM[:1], DKM[1:])[0]), dam_xy_true=km(DXY[None])[0].astype(np.float32),
                     outline_b=ring_arrays(CPOLY, zb_s), outline_c=ring_arrays(CPOLY, zc_s, 300),
                     basin_outline=ring_arrays(BPOLY, zb_s, 3000))
