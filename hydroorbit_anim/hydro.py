@@ -31,7 +31,8 @@ from scipy.stats import norm
 CATCH = "douglas"
 TAG = "2019feb"
 ISSUE = pd.Timestamp("2019-02-22 06:00", tz="UTC")     # forecast issue time t0 (before the peak)
-PRE_H, HORIZON, POST_H = 30.0, 48.0, 72.0              # hours shown before t0; forecast horizon; hours shown after t0
+PRE_H, HORIZON, POST_H = 30.0, 48.0, 72.0              # hours before t0; forecast horizon; hours modelled after t0
+H_SHOW = PRE_H + HORIZON                               # the panel and the video clock end with the forecast horizon
 HERE = pathlib.Path(__file__).parent
 D, B = HERE / "data", HERE / "build"
 (HERE / "private").mkdir(exist_ok=True)
@@ -224,13 +225,13 @@ print(f"rain grid {grid.shape}, basin mean check {grid[:, mask].mean():.3f} mm/h
 tp = T[ipk]
 rain_h = float((rain_start - T0).total_seconds() / 3600)
 knots_t = [11.0, 14.0, 18.0, 27.0, 28.4, 29.8, 31.6, 33.2, 34.4, 40.0]
-knots_h = [rain_h - 3.0, H_ISSUE - 5.0, H_ISSUE, H_ISSUE, 50.0, 68.0, tp + 2.0, tp + 14.0, H_END, H_END]
+knots_h = [rain_h - 3.0, H_ISSUE - 5.0, H_ISSUE, H_ISSUE, 48.0, 64.0, 74.0, H_SHOW, H_SHOW, H_SHOW]
 assert np.all(np.diff(knots_t) > 0) and np.all(np.diff(knots_h) >= 0), knots_h
 print("clock knots", [(a, round(b, 1)) for a, b in zip(knots_t, knots_h)])
 
 np.savez_compressed(
     B / "hydro.npz", T=T, t0_ns=np.int64(T0.as_unit("ns").value), RAIN=RAIN, RAIN_HT=RAIN_HOURLY_T, RAIN_H=RAIN_HOURLY,
-    QOBS=QOBS, QMOD=qmod, QN=QN.astype(np.float16), RUNOFF=R, H_END=H_END, H_ISSUE=H_ISSUE, HORIZON=HORIZON, ipk=ipk,
+    QOBS=QOBS, QMOD=qmod, QN=QN.astype(np.float16), RUNOFF=R, H_END=H_END, H_SHOW=H_SHOW, H_ISSUE=H_ISSUE, HORIZON=HORIZON, ipk=ipk,
     FC_T=FC_T, ML50=ML50, ML10=ML10, ML90=ML90, TVA=TVA,
     P_MEDIAN=P_MEDIAN, P_MODERATE=P_MODERATE, Q_MEDIAN=Q_MEDIAN, Q_MODERATE=Q_MODERATE,
     clock_t=knots_t, clock_h=knots_h, C=C, KH=KH)
