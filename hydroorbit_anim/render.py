@@ -36,7 +36,7 @@ S = ARGS.scale
 SW, SH = int(1920 * S), int(1080 * S)
 FPS = ARGS.fps
 T_INTRO = 7.0                      # CONUS opening; the basin story (all other timings) starts after it
-DUR_MAIN = 40.0
+DUR_MAIN = 47.5                    # basin story 0-38.6 s, pull back out to CONUS, then the title moves to the centre
 DUR = T_INTRO + DUR_MAIN
 CATCH = "douglas"                  # zoom catchment: drainage above Douglas Dam
 
@@ -54,20 +54,20 @@ cr = np.load(B / "catch_rivers.npz")
 rd = np.load(B / "routing.npz")
 hd = np.load(B / "hydro.npz")
 facts = dict(l.strip().split("=") for l in open(B / "facts.txt"))
-mr = np.load(HERE / "data" / f"mrms_grid_{CATCH}_2021mar.npz")
+mr = np.load(HERE / "data" / f"rain_grid_{CATCH}_2019feb.npz")   # observed basin-mean rain, stylised pattern (hydro.py)
 dm = np.load(B / "dams.npz")
 
 T, H_END = hd["T"], float(hd["H_END"])
+H_SHOW = float(hd["H_SHOW"])                      # panel x axis and observed line end here (t0 + 48 h)
 DT = T[1] - T[0]
 QOBS, RAIN, QN = hd["QOBS"], hd["RAIN"], hd["QN"].astype(np.float32)
 IPK = int(hd["ipk"])
 H_ISSUE = float(hd["H_ISSUE"])
-FC_T, ML50, ML05, ML95, TVA = hd["FC_T"], hd["ML50"], hd["ML05"], hd["ML95"], hd["TVA"]
-FC_PLACEHOLDER = bool(hd["FC_PLACEHOLDER"])
+FC_T, ML50, ML10, ML90, TVA = hd["FC_T"], hd["ML50"], hd["ML10"], hd["ML90"], hd["TVA"]
+HORIZON = float(hd["HORIZON"])
 P_MEDIAN, P_MODERATE = float(hd["P_MEDIAN"]), float(hd["P_MODERATE"])
 Q_MEDIAN, Q_MODERATE = float(hd["Q_MEDIAN"]), float(hd["Q_MODERATE"])
 T0 = pd.Timestamp(int(hd["t0_ns"]), tz="UTC")
-RAIN_REAL = bool(hd["rain_real"])
 TMAP = PchipInterpolator(hd["clock_t"], hd["clock_h"])
 T_STORM0, T_STORM1 = float(hd["clock_t"][0]), float(hd["clock_t"][-1])
 INFLOW = np.c_[cd["inflow_xy"], cd["inflow_z"]].astype(np.float64)    # USGS reservoir-inflow gauges
@@ -229,28 +229,29 @@ def keyed(t, keys):
     return dict(keys[-1][1])
 
 
-W = 0.35                                        # window-centre shift: frame the map left of the sidebar
-HEAD = INFLOW_C + [-6, -4, 0]                   # the inflow gauges, between the headwaters and the lake
+W = 0.30                                        # window-centre shift while the hydrograph panel is on the right
+HEAD = INFLOW_C + [-6, -4, 0]                   # toward the Newport gauge, between the headwaters and the lake
+US_C = np.r_[cu["centre"], 0.0]
 CAM_KEYS = [
-    (0.0, dict(f=B_FOCAL + [-75, 0, 0], az=196.0, el=44.0, dist=1190.0, wcx=W, wcy=-0.06, ex=10.0)),
-    (5.0, dict(f=B_FOCAL + [-45, 0, 0], az=208.0, el=46.0, dist=1120.0, wcx=W, wcy=-0.04, ex=10.0)),
-    (7.2, dict(f=C_CENT + [-20, 0, 0], az=240.0, el=42.0, dist=660.0, wcx=W, wcy=-0.04, ex=8.0)),
-    (9.6, dict(f=C_CENT + [-14, 0, 0], az=278.0, el=46.0, dist=340.0, wcx=W, wcy=0.0, ex=5.0)),
-    (11.2, dict(f=C_CENT + [-14, -2, 0], az=284.0, el=40.0, dist=305.0, wcx=W, wcy=0.0, ex=4.0)),
+    (0.0, dict(f=B_FOCAL + [-40, 10, 0], az=196.0, el=44.0, dist=1060.0, wcx=0.0, wcy=-0.04, ex=10.0)),
+    (5.0, dict(f=B_FOCAL + [-10, 10, 0], az=208.0, el=46.0, dist=1000.0, wcx=0.0, wcy=-0.03, ex=10.0)),
+    (7.2, dict(f=C_CENT + [-20, 0, 0], az=240.0, el=42.0, dist=660.0, wcx=0.0, wcy=-0.04, ex=8.0)),
+    (9.6, dict(f=C_CENT + [-14, 0, 0], az=278.0, el=46.0, dist=340.0, wcx=0.0, wcy=0.0, ex=5.0)),
+    (11.2, dict(f=C_CENT + [-14, -2, 0], az=284.0, el=40.0, dist=305.0, wcx=0.05, wcy=0.0, ex=4.0)),
     (20.0, dict(f=C_CENT + [-8, -4, 0], az=292.0, el=39.0, dist=290.0, wcx=W, wcy=0.0, ex=4.0)),
     (26.0, dict(f=HEAD, az=298.0, el=35.0, dist=225.0, wcx=W, wcy=0.0, ex=4.0)),
     (32.0, dict(f=C_CENT + [-10, 0, 0], az=290.0, el=40.0, dist=300.0, wcx=W, wcy=0.0, ex=4.0)),
     (35.6, dict(f=DAM_C + [14, -2, 0], az=298.0, el=30.0, dist=85.0, wcx=W, wcy=0.0, ex=4.0)),
     (38.0, dict(f=DAM_C + [7, -2, 0], az=308.0, el=27.0, dist=50.0, wcx=W, wcy=0.0, ex=4.0)),
-    (40.0, dict(f=DAM_C + [7, -2, 0], az=316.0, el=27.0, dist=52.0, wcx=W, wcy=0.0, ex=4.0)),
+    (38.6, dict(f=DAM_C + [7, -2, 0], az=311.0, el=27.0, dist=51.0, wcx=W, wcy=0.0, ex=4.0)),
+    # pull back out: Douglas -> Tennessee basin -> contiguous US (title centred at the top)
+    (41.0, dict(f=B_FOCAL + [-10, 10, 0], az=214.0, el=46.0, dist=1150.0, wcx=0.0, wcy=-0.03, ex=10.0)),
+    (43.6, dict(f=US_C + [0, 200, 0], az=184.0, el=78.0, dist=6400.0, wcx=0.0, wcy=0.0, ex=10.0)),
+    (47.5, dict(f=US_C + [0, 200, 0], az=182.0, el=80.0, dist=6800.0, wcx=0.0, wcy=0.0, ex=10.0)),
 ]
-# the 7 -> 12 s swoop: distance changes fastest in the middle (log-distance + ease)
-
-
-US_C = np.r_[cu["centre"], 0.0]
 INTRO_KEYS = [
-    (0.0, dict(f=US_C + [0, 60, 0], az=180.0, el=82.0, dist=7600.0, wcx=W, wcy=0.0, ex=10.0)),
-    (2.8, dict(f=US_C + [80, 30, 0], az=184.0, el=76.0, dist=6900.0, wcx=W, wcy=0.0, ex=10.0)),
+    (0.0, dict(f=US_C + [0, 60, 0], az=180.0, el=82.0, dist=5900.0, wcx=0.0, wcy=0.0, ex=10.0)),
+    (2.8, dict(f=US_C + [60, 30, 0], az=184.0, el=76.0, dist=5500.0, wcx=0.0, wcy=0.0, ex=10.0)),
     (T_INTRO, CAM_KEYS[0][1]),
 ]
 
@@ -434,9 +435,9 @@ def basin_river_layer(view, t, cov, col):
     # reveal: main stem first, then lower orders ("grows outward")
     u = 3.0 + (MAXO - 3.0) * (1 - ease(ramp(t, 0.4, 4.4)))
     vis = np.clip((B_ORDER - u) / 0.8 + 1, 0, 1)
-    fade_c = ease(ramp(t, 9.5, 11.0))          # hand over to the detailed catchment network
+    fade_c = ease(ramp(t, 9.5, 11.0)) * (1 - ease(ramp(t, 39.8, 40.6)))   # catchment network takes over, then hands back
     vis = vis * np.where(B_INC, 1 - fade_c, 1.0)
-    dim = 1 - 0.55 * ease(ramp(t, 5.0, 7.5))
+    dim = 1 - 0.55 * ease(ramp(t, 5.0, 7.5)) * (1 - ease(ramp(t, 40.0, 41.4)))
     vis_l = vis[B_LID]
     sx, sy, z01, ok = view.project(BV[:, 0], BV[:, 1], BV[:, 2])
     okv = view.visible(sx, sy, z01, ok, tol=0.01, slack=2) & (vis_l > 0.01)
@@ -445,7 +446,7 @@ def basin_river_layer(view, t, cov, col):
         return
     lid = B_LID[i0]
     o = B_ORDER[lid]
-    w = (0.35 + 0.42 * (o - 3)) * S * (1.0 if t < 9 else 0.8)
+    w = (0.35 + 0.42 * (o - 3)) * S * (1.0 if t < 9 or t > 40 else 0.8)
     q = np.clip((o - 3) / 5, 0, 1)
     # flow: brightness waves travelling downstream (toward smaller distance-to-mouth)
     ph = (B_VPATH[i0] + 55.0 * t) / 38.0
@@ -574,13 +575,13 @@ def dam_layer(img, view, t, mode_catch, alpha):
         return
     z = np.where(mode_catch & _in_c, DAM_ZC, DAM_ZB) + (0.01 if mode_catch else 0.03)
     sx, sy, z01, ok = view.project(DAM_XY[:, 0], DAM_XY[:, 1], z)
-    vis = view.visible(sx, sy, z01, ok, tol=0.02, slack=3) & (sx < (SB_X0 - 30) * S)
+    vis = view.visible(sx, sy, z01, ok, tol=0.02, slack=3)
     # staggered pop-in by storage (largest first)
     rank = np.argsort(np.argsort(-dm["storage"])) / max(N_DAMS - 1, 1)
     for i in np.flatnonzero(vis):
         a = alpha * ease(ramp(t, 1.4 + 2.2 * rank[i], 1.8 + 2.2 * rank[i]))
         if not _in_focus[i]:
-            a *= 1 - ease(ramp(t, 5.4, 7.0))      # only the focus drainage's dams remain after the zoom starts
+            a *= 1 - ease(ramp(t, 5.4, 7.0)) * (1 - ease(ramp(t, 40.4, 41.4)))   # focus drainage only, until the pull-back
         if a <= 0:
             continue
         R = (3.2 + 4.2 * DAM_R[i]) * S * (1.25 if mode_catch else 1.0)
@@ -802,103 +803,70 @@ SS = 2  # overlay supersampling
 FS = S * SS
 F = {k: font(n, s * FS) for k, (n, s) in {
     "brand": ("Inter-SemiBold.otf", 32), "brand2": ("Inter-Regular.otf", 24),
-    "title": ("Inter-SemiBold.otf", 42), "title2": ("Inter-SemiBold.otf", 38),
-    "sub": ("Inter-Medium.otf", 24),
+    "title": ("Inter-SemiBold.otf", 32), "sub": ("Inter-Medium.otf", 22),
+    "maplbl": ("Inter-SemiBold.otf", 50), "maplbl2": ("Inter-Medium.otf", 26),
     "ptitle": ("Inter-SemiBold.otf", 27), "leg": ("Inter-Medium.otf", 20), "tick": ("Inter-Medium.otf", 19),
     "axis": ("Inter-Medium.otf", 19), "chip": ("Inter-Bold.otf", 21), "note": ("Inter-Medium.otf", 17)}.items()}
 
-# ------------------------------------------------------------------ sidebar (all text lives here, not on the map)
-SB_X0 = 1240                      # sidebar left edge (1080p units); the map is framed in 0..SB_X0
-SB_M = 36
-CX0, CX1 = SB_X0 + SB_M, 1920 - SB_M  # content column
+# ------------------------------------------------------------------ text: full-screen map, text block top-left
+# All times in this section are VIDEO time (tv), including the CONUS opening.
+TX = 48                            # left margin of the top-left text block (1080p units)
 C_TVA = (255, 152, 72)
 C_LAKE = (46, 118, 178)
 FACTS_AREA = int(round(float(facts["basin_area_km2"]), -3))
 CATCH_AREA = float(facts["catch_area_km2"])
+TI = T_INTRO
 
-INTRO_CAPTIONS = [
-    (0.3, 6.6, "HydroORBIT: Hydropower inflow forecasting", "Rivers of the contiguous United States"),
+CAPTIONS = [  # (start, end, title, subtitle)
+    (TI + 11.6, TI + 18.0, "Storm rainfall generates runoff", "February 22–24, 2019"),
+    (TI + 18.2, TI + 26.8, "Forecast issued before the peak", "HydroORBIT and TVA forecasts, next 48 hours"),
+    (TI + 27.0, TI + 33.8, "Predicted vs. observed streamflow", "Observed flow at the Newport gauge"),
 ]
-CAPTIONS = [
-    (0.3, 5.4, "Tennessee River Basin",
-     f"{FACTS_AREA:,}\u00a0km² across 7 states, with {N_DAMS} hydropower dams"),
-    (5.6, 11.0, "Focus: Douglas Reservoir",
-     f"French Broad drainage above Douglas Dam, {CATCH_AREA:,.0f}\u00a0km²"),
-    (11.2, 18.0, "Storm rainfall generates runoff", "March 25, 2021 · French Broad, Pigeon and Nolichucky rivers"),
-    (18.2, 26.8, "Forecast issued before the peak", "HydroORBIT ML and TVA forecasts, next\u00a048\u00a0hours"),
-    (27.0, 33.8, "Predicted vs. observed inflow", "Observed inflow at the three USGS gauges"),
-    (34.0, 39.4, "HydroORBIT: AI-Powered Hydropower Inflow Forecasting",
-     "Predicting when and how much water arrives to support hydropower and water management"),
+# once the pull-back has reached the contiguous US (story 43.6 s), the top-left title slides to the top centre
+T_MOVE0, T_MOVE1 = TI + 43.9, TI + 45.2
+
+LEGEND_ITEMS = [  # (key, label, in, out); rows stack and slide as items come and go
+    ("river", "River network", TI + 11.4, TI + 38.2),
+    ("dam", "Hydropower dam", TI + 11.4, TI + 38.2),
+    ("lake", "Reservoir", TI + 11.4, TI + 38.2),
+    ("focus", "Douglas Dam", TI + 11.4, TI + 38.2),
+    ("gauge", "Newport gauge", TI + 11.4, TI + 38.2),
 ]
+CAP_Y, LEG_Y = 104, 192
+
+# soft shading behind the text: top-left corner (always) and a top band (end title)
+_yy, _xx = np.mgrid[0:SH, 0:SW].astype(np.float32) / S
+SHADE_TL = (0.62 * np.clip(1 - np.hypot(_xx / 900.0, _yy / 520.0), 0, 1) ** 1.2)[..., None].astype(np.float32)
+SHADE_TOP = (0.55 * np.clip(1 - _yy / 330.0, 0, 1) ** 1.3)[..., None].astype(np.float32)
+del _yy, _xx
 
 
-def wrap(d, text, fnt, width):
-    lines, cur = [], ""
-    for w_ in text.split(" "):          # not split(): keep non-breaking spaces together
-        nxt = (cur + " " + w_).strip()
-        if d.textlength(nxt, font=fnt) <= width or not cur:
-            cur = nxt
-        else:
-            lines.append(cur); cur = w_
-    return lines + [cur]
+def shadow_text(d, xy, txt, fnt, col, a, anchor="la"):
+    d.text((xy[0], xy[1] + 2 * FS), txt, font=fnt, fill=(0, 0, 0, int(170 * a)), anchor=anchor)
+    d.text(xy, txt, font=fnt, fill=col[:3] + (int(255 * a),), anchor=anchor)
 
 
-def draw_sidebar_bg(d, a):
-    """Soft translucent column on the right, fading in from the map side."""
-    x0 = SB_X0 * FS
-    ramp_w = 70 * FS
-    for i in range(24):
-        xa = x0 - ramp_w + ramp_w * i / 24
-        d.rectangle([xa, 0, xa + ramp_w / 24 + 1, SH * SS], fill=(6, 11, 22, int(205 * a * (i + 1) / 25)))
-    d.rectangle([x0, 0, SW * SS, SH * SS], fill=(6, 11, 22, int(205 * a)))
-
-
-def draw_caption(d, t, caps=None):
-    for a, b, title, sub in (CAPTIONS if caps is None else caps):
-        ca = ease(ramp(t, a, a + 0.4)) * (1 - ease(ramp(t, b - 0.4, b)))
+def draw_caption(d, tv):
+    for a, b, title, sub in CAPTIONS:
+        ca = ease(ramp(tv, a, a + 0.4)) * (1 - ease(ramp(tv, b - 0.4, b)))
         if ca <= 0:
             continue
-        dx = 16 * FS * (1 - ease(ramp(t, a, a + 0.4)))
-        x = CX0 * FS + dx
-        fk = "title" if len(title) <= 34 else "title2"
-        y = 104 * FS
-        for ln in wrap(d, title, F[fk], (CX1 - CX0) * FS):
-            d.text((x, y + 2 * FS), ln, font=F[fk], fill=(0, 0, 0, int(150 * ca)), anchor="la")
-            d.text((x, y), ln, font=F[fk], fill=(255, 255, 255, int(255 * ca)), anchor="la")
-            y += (50 if fk == "title" else 45) * FS
-        y += 8 * FS
-        for ln in wrap(d, sub, F["sub"], (CX1 - CX0) * FS):
-            d.text((x, y), ln, font=F["sub"], fill=(205, 216, 232, int(255 * ca)), anchor="la")
-            y += 30 * FS
+        x = (TX + 14 * (1 - ease(ramp(tv, a, a + 0.4)))) * FS
+        shadow_text(d, (x, CAP_Y * FS), title, F["title"], (255, 255, 255), ca)
+        if sub:
+            shadow_text(d, (x, (CAP_Y + 42) * FS), sub, F["sub"], (214, 224, 238), ca)
 
 
-LEGEND = [  # (key, label, appears at, column, row)
-    ("dam", "Hydropower dam (NID)", 1.4, 0, 0),
-    ("lake", "Reservoir", 1.4, 1, 0),
-    ("river", "River network (NHDPlus)", 0.6, 0, 1),
-    ("outline", "Drainage above Douglas Dam", 5.2, 1, 1),
-    ("focus", "Douglas Dam (focus)", 9.6, 0, 2),
-    ("gauge", "Inflow gauges (USGS)", 10.4, 1, 2),
-]
-INTRO_LEGEND = [
-    ("river", "River network (USGS)", 0.6, 0, 0),
-    ("state", "State boundary", 0.6, 1, 0),
-    ("outline", "Tennessee River Basin", 1.0, 0, 1),
-]
-LEG_Y = 300
-
-
-def draw_legend(d, t, a_all, items=None):
+def draw_legend(d, tv):
     u = FS
-    colw = (CX1 - CX0) / 2
-    for key, label, ta, col_, row in (LEGEND if items is None else items):
-        a = ease(ramp(t, ta, ta + 0.5)) * a_all
-        if key == "outline":
-            a *= 1 - ease(ramp(t, 11.0, 12.0))
+    acc = 0.0
+    for key, label, t_in, t_out in LEGEND_ITEMS:
+        a = ease(ramp(tv, t_in, t_in + 0.5)) * (1 - ease(ramp(tv, t_out - 0.4, t_out)))
         if a <= 0:
             continue
-        x = (CX0 + col_ * colw) * u
-        y = (LEG_Y + row * 34) * u
+        x = TX * u
+        y = (LEG_Y + 30 * acc) * u
+        acc += a
         cx, cy = x + 12 * u, y + 13 * u
         A = int(255 * a)
         if key in ("dam", "focus"):
@@ -909,7 +877,7 @@ def draw_legend(d, t, a_all, items=None):
         elif key == "lake":
             d.rounded_rectangle([cx - 12 * u, cy - 8 * u, cx + 12 * u, cy + 8 * u], radius=5 * u, fill=C_LAKE + (A,),
                                 outline=(120, 190, 230, A), width=int(1.5 * u))
-        elif key == "river":
+        elif key in ("river", "river_us"):
             d.line([cx - 13 * u, cy + 5 * u, cx - 3 * u, cy - 2 * u, cx + 13 * u, cy - 5 * u], fill=tuple(int(c) for c in C_RIVER) + (A,),
                    width=int(4 * u), joint="curve")
         elif key == "state":
@@ -919,13 +887,36 @@ def draw_legend(d, t, a_all, items=None):
         elif key == "gauge":
             d.ellipse([cx - 10 * u, cy - 10 * u, cx + 10 * u, cy + 10 * u], outline=(255, 255, 255, A), width=int(2 * u))
             d.ellipse([cx - 5 * u, cy - 5 * u, cx + 5 * u, cy + 5 * u], fill=C_AMBER + (A,))
-        d.text((x + 34 * u, cy), label, font=F["leg"], fill=(226, 232, 242, A), anchor="lm")
+        shadow_text(d, (x + 34 * u, cy), label, F["leg"], (226, 232, 242), a, anchor="lm")
 
 
-# ------------------------------------------------------------------ hydrograph panel
-PX, PY = CX0 - 8, 422
-PW, PH = CX1 - CX0 + 16, 636
-QMAX = 2500.0
+def draw_map_labels(d, labels):
+    """Centred labels above a highlighted area: (text, x, y_baseline, font key, colour, alpha) in 1080p px."""
+    for txt, x, y, fk, col, a in labels:
+        if a > 0:
+            shadow_text(d, (x * FS, y * FS), txt, F[fk], col, a, anchor="ms")
+
+
+def draw_title(d, tv):
+    """'HydroORBIT  Hydropower inflow forecasting': top-left for the whole video, larger than the scene text below
+    it; at the end the same line slides to the top centre and grows."""
+    m = ease(ramp(tv, T_MOVE0, T_MOVE1))
+    sc = 1 + 0.4 * m
+    f1 = font("Inter-SemiBold.otf", 46 * sc * FS)
+    f2 = font("Inter-Regular.otf", 40 * sc * FS)
+    t1, t2 = "HydroORBIT", "Hydropower inflow forecasting"
+    w1, gap, w2 = d.textlength(t1, font=f1), 16 * sc * FS, d.textlength(t2, font=f2)
+    x = TX * FS * (1 - m) + (SW * SS / 2 - (w1 + gap + w2) / 2) * m
+    y = (78 * (1 - m) + 140 * m) * FS
+    shadow_text(d, (x, y), t1, f1, (255, 255, 255), 0.97, anchor="ls")
+    shadow_text(d, (x + w1 + gap, y), t2, f2, (206, 216, 232), 0.95, anchor="ls")
+    return m
+
+
+# ------------------------------------------------------------------ hydrograph panel (right side, only while shown)
+PW, PH = 650, 676
+PX, PY = 1920 - PW - 36, 110
+QMAX = 1500.0
 MINUS = "−"
 
 
@@ -958,10 +949,8 @@ def panel_layer(t, th, alpha):
     d.rounded_rectangle([0, 0, w - 1, h - 1], radius=20 * u, fill=(40, 60, 90, 46), outline=(255, 255, 255, 46), width=int(u))
     m = 22 * u
     d.text((m, 16 * u), "Inflow to Douglas Reservoir", font=F["ptitle"], fill=(244, 247, 252, 255))
-    d.text((w - m, 30 * u), "3 USGS gauges", font=F["note"], fill=(160, 172, 192, 255), anchor="rm")
-    d.text((m, 52 * u), "French Broad + Pigeon + Nolichucky, just above the lake", font=F["note"], fill=(170, 182, 200, 255))
     # legend: two rows
-    ly = 86 * u
+    ly = 62 * u
     def leg(x, y, kind, txt):
         if kind == "obs":
             d.line([x, y + 11 * u, x + 30 * u, y + 11 * u], fill=C_OBS + (255,), width=int(4 * u))
@@ -973,27 +962,29 @@ def panel_layer(t, th, alpha):
             dashed(d, [(x, y + 11 * u), (x + 30 * u, y + 11 * u)], C_TVA + (255,), int(4 * u), 9 * u, 5 * u)
         d.text((x + 38 * u, y + 11 * u), txt, font=F["leg"], fill=(222, 228, 238, 255), anchor="lm")
     leg(m, ly, "obs", "Observed")
-    leg(m + 170 * u, ly, "ml", "HydroORBIT (ML)")
+    leg(m + 170 * u, ly, "ml", "HydroORBIT forecast")
     leg(m, ly + 30 * u, "tva", "TVA forecast")
-    leg(m + 170 * u, ly + 30 * u, "band", "HydroORBIT 5–95% range")
+    leg(m + 170 * u, ly + 30 * u, "band", "HydroORBIT 10–90% range")
     x0, x1 = 70 * u, w - 22 * u
-    rs0, rs1 = 196 * u, 226 * u                      # rain strip (own axis, mm/h)
-    y0, y1 = 268 * u, h - 100 * u
+    rs0, rs1 = 172 * u, 252 * u                      # rain strip (own axis, mm/h), tall enough to read the bursts
+    y0, y1 = 302 * u, h - 100 * u
 
-    def X(ha): return x0 + (x1 - x0) * ha / H_END
+    def X(ha): return x0 + (x1 - x0) * ha / H_SHOW
     def Y(q): return y1 - (y1 - y0) * min(q, QMAX) / QMAX
 
-    RMAX = 15.0
+    RMAX = 4.0
     d.line([x0, rs0, x1, rs0], fill=(255, 255, 255, 40), width=int(u))
     d.text((x0 - 10 * u, rs0 + 2 * u), "Rain", font=F["note"], fill=C_RAIN + (255,), anchor="ra")
+    d.line([x0, rs1, x1, rs1], fill=(255, 255, 255, 18), width=int(u))
+    d.text((x0 - 10 * u, rs1), f"{RMAX:.0f} mm/h", font=F["note"], fill=(150, 160, 178, 255), anchor="rd")
     for ha, rv_ in zip(hd["RAIN_HT"], hd["RAIN_H"]):
-        if ha > th or ha >= H_END:
+        if ha > th or ha >= H_SHOW:
             break
         if rv_ < 0.1:
             continue
         d.rectangle([X(ha) + 0.4 * u, rs0, X(ha + 1) - 0.4 * u, rs0 + (rs1 - rs0) * min(rv_, RMAX) / RMAX], fill=C_RAIN + (210,))
     d.text((x0 - 10 * u, y0 - 26 * u), "Streamflow (m³/s)", font=F["note"], fill=(170, 180, 198, 255), anchor="lm")
-    for q in (0, 500, 1000, 1500, 2000, 2500):
+    for q in (0, 500, 1000, 1500):
         yy = Y(q)
         d.line([x0, yy, x1, yy], fill=(255, 255, 255, 26), width=int(u))
         d.text((x0 - 10 * u, yy), f"{q}", font=F["tick"], fill=(170, 180, 198, 255), anchor="rm")
@@ -1012,22 +1003,22 @@ def panel_layer(t, th, alpha):
             break
         yy = Y(qv)
         dashed(d, [(x0, yy), (x1, yy)], c + (int(200 * fa),), int(2 * u), 7 * u, 6 * u)
-        d.text((x1 - 6 * u, yy - 4 * u), lab, font=F["note"], fill=c + (int(255 * fa),), anchor="rd")
+        d.text((x0 + 8 * u, yy - 4 * u), lab, font=F["note"], fill=c + (int(255 * fa),), anchor="ld")   # empty history side
 
     ia = ease(ramp(t, 17.4, 18.4))                    # issue marker appears when the clock reaches t0
     fprog = ease(ramp(t, 18.6, 22.0))                 # forecasts draw in once, then never change
     if fprog > 0:
-        sel = (FC_T - H_ISSUE) <= fprog * (H_END - H_ISSUE) + 1e-9
+        sel = (FC_T - H_ISSUE) <= fprog * HORIZON + 1e-9
         if sel.sum() > 1:
             band = Image.new("RGBA", im.size, (0, 0, 0, 0))
-            ImageDraw.Draw(band).polygon([(X(a_), Y(b_)) for a_, b_ in zip(FC_T[sel], ML95[sel])] +
-                                         [(X(a_), Y(b_)) for a_, b_ in zip(FC_T[sel][::-1], ML05[sel][::-1])],
+            ImageDraw.Draw(band).polygon([(X(a_), Y(b_)) for a_, b_ in zip(FC_T[sel], ML90[sel])] +
+                                         [(X(a_), Y(b_)) for a_, b_ in zip(FC_T[sel][::-1], ML10[sel][::-1])],
                                          fill=C_TEAL + (64,))
             im.alpha_composite(band)
             dashed(d, [(X(a_), Y(b_)) for a_, b_ in zip(FC_T[sel], TVA[sel])], C_TVA + (255,), int(4 * u), 12 * u, 7 * u)
             d.line([(X(a_), Y(b_)) for a_, b_ in zip(FC_T[sel], ML50[sel])], fill=C_TEAL + (255,), width=int(5 * u), joint="curve")
     # observed (only what has happened)
-    kk = T <= min(th, H_END)
+    kk = T <= min(th, H_SHOW)
     if kk.sum() > 2:
         d.line([(X(a_), Y(b_)) for a_, b_ in zip(T[kk][::2], QOBS[kk][::2])], fill=C_OBS + (255,), width=int(5 * u), joint="curve")
         lx, ly_ = X(T[kk][-1]), Y(QOBS[kk][-1])
@@ -1038,15 +1029,15 @@ def panel_layer(t, th, alpha):
         d.line([xi, y0 - 4 * u, xi, y1], fill=C_AMBER + (int(255 * ia),), width=int(3 * u))
         lab = "Forecast issued (t₀)"
         tw = d.textlength(lab, font=F["chip"])
-        cy_ = Y(0.84 * QMAX)                          # right of the line, above the forecast band
-        d.rounded_rectangle([xi + 6 * u, cy_ - 17 * u, xi + tw + 30 * u, cy_ + 17 * u], radius=9 * u,
+        cy_ = Y(0.93 * QMAX)                          # centred on the line, above the forecast band
+        d.rounded_rectangle([xi - tw / 2 - 12 * u, cy_ - 17 * u, xi + tw / 2 + 12 * u, cy_ + 17 * u], radius=9 * u,
                             fill=C_AMBER + (int(255 * ia),))
-        d.text((xi + 18 * u + tw / 2, cy_), lab, font=F["chip"], fill=(20, 24, 34, int(255 * ia)), anchor="mm")
+        d.text((xi, cy_), lab, font=F["chip"], fill=(20, 24, 34, int(255 * ia)), anchor="mm")
     # chance of exceeding each flood category, from the HydroORBIT forecast range
     pa = ease(ramp(t, 22.0, 23.0))
     if pa > 0:
         # one row under the legend: "Chance of flooding  [Minor 64%]  [Moderate 1%]"
-        yy = 160 * u
+        yy = 136 * u
         d.text((m, yy), "Chance of flooding", font=F["leg"], fill=(200, 210, 226, int(255 * pa)), anchor="lm")
         xx = m + d.textlength("Chance of flooding", font=F["leg"]) + 14 * u
         for lab, pv, c in (("Median", P_MEDIAN, (255, 214, 102)), ("Moderate", P_MODERATE, (255, 130, 90))):
@@ -1071,8 +1062,8 @@ def panel_layer(t, th, alpha):
 
 
 def US_FADE(t):
-    """CONUS plane opacity during the basin story: gone once the focus moves to the French Broad."""
-    return 1 - ease(ramp(t, 4.6, 7.0))
+    """CONUS plane opacity during the basin story: gone once the focus moves to the French Broad, back for the pull-back."""
+    return max(1 - ease(ramp(t, 4.6, 7.0)), ease(ramp(t, 40.6, 42.4)))
 
 
 def outline_glow(img, view, ring_v, a, width):
@@ -1114,21 +1105,32 @@ class Renderer:
         return self.frame_main(tv - T_INTRO)
 
     def frame_intro(self, tv):
+        self.labels = []
         p = keyed(tv, INTRO_KEYS)
-        img, view = self.render_3d(p, False, tv, us=1.0)
-        ol = ease(ramp(tv, 0.8, 1.8)) * (1 - ease(ramp(tv, 5.8, 6.9)))
+        # plain CONUS map first; the basin terrain and its outline appear together at the highlight
+        img, view = self.render_3d(p, False, tv, us=1.0, basin=ease(ramp(tv, 2.8, 3.4)))
+        ol = ease(ramp(tv, 2.8, 3.4))
         if ol > 0:
             img = outline_glow(img, view, cd["basin_outline"].astype(np.float64), ol * (0.8 + 0.2 * math.sin(tv * 4.0)), 2.6)
         img *= VIG
         img = np.clip(img, 0, 255).astype(np.uint8)
         return self.overlay(img, tv, 0.0, intro=True)
 
+    def label_anchor(self, view, ring_v):
+        """Screen-space (centre x, top y) of a 3D outline, in 1080p px; None if it is off screen."""
+        sx, sy, z01, ok = view.project(ring_v[:, 0], ring_v[:, 1], ring_v[:, 2])
+        m = ok & (sx > -200) & (sx < SW + 200) & (sy > -200) & (sy < SH + 200)
+        if m.sum() < 10:
+            return None
+        return (float(np.clip((sx[m].min() + sx[m].max()) / 2 / S, 330, 1590)), float(sy[m].min() / S))
+
     def frame_main(self, t):
+        self.labels = []
         p = camera_params(t)
         ex = float(p["ex"])
         th = sim_hours(t)
         # which terrain: crossfade basin -> catchment mesh during the swoop
-        xf = ramp(t, 8.6, 9.6)
+        xf = ramp(t, 8.6, 9.6) * (1 - ramp(t, 39.7, 40.3))     # catchment mesh between the swoop and the pull-back
         if 0 < xf < 1:
             img_a, view_a = self.render_3d(p, False, t, us=US_FADE(t))
             img_b, view = self.render_3d(p, True, t)
@@ -1142,7 +1144,7 @@ class Renderer:
         wx, wy, wz, zz = view.unproject(step)
         terr = zz < 1.0
         dimfac = np.ones_like(wx, dtype=np.float32)
-        focus = ease(ramp(t, 5.0, 7.5))
+        focus = ease(ramp(t, 5.0, 7.5)) * (1 - ease(ramp(t, 40.0, 41.4)))
         if focus > 0:
             dout = GB.sample(COUT_B, wx, wy)
             if mode_catch:
@@ -1201,7 +1203,8 @@ class Renderer:
         fl_add = np.zeros((SH, SW, 3), np.float32)
         sa = ease(ramp(t, 1.0, 3.0))
         if not mode_catch:
-            B_STREAKS.draw(view, fl_add, t, 16.0, 7.0, 0.55 * sa * (1 - 0.45 * ease(ramp(t, 5.0, 7.5))), 1.5 * S)
+            B_STREAKS.draw(view, fl_add, t, 16.0, 7.0,
+                           0.55 * sa * (1 - 0.45 * ease(ramp(t, 5.0, 7.5)) * (1 - ease(ramp(t, 40.0, 41.4)))), 1.5 * S)
         else:
             qr = reach_q(th) * flood_on if th > 0 else np.zeros(C_ORDER.size, np.float32)
             gain = (0.35 + 0.7 * qr[C_STREAKS.line]) * ease(ramp(t, 9.4, 11.0))
@@ -1214,6 +1217,11 @@ class Renderer:
         small = riv[::4, ::4]
         g = blur(small, 2.2) + 0.5 * blur(small, 7)
         img += glow_gain * 0.6 * upsample(g, 4)
+
+        # ---- Tennessee basin outline (amber), carried over from the CONUS opening
+        bo = 1 - ease(ramp(t, 4.4, 5.4))
+        if bo > 0:
+            img = outline_glow(img, view, cd["basin_outline"].astype(np.float64), bo * (0.8 + 0.2 * math.sin((t + T_INTRO) * 4.0)), 2.6)
 
         # ---- catchment outline (amber) while selecting it
         ol = ease(ramp(t, 4.8, 5.8)) * (1 - ease(ramp(t, 10.5, 12.0)))
@@ -1271,22 +1279,38 @@ class Renderer:
         ga = ease(ramp(t, 10.2, 11.4))
         if ga > 0 and mode_catch:
             isx, isy, iz, iok = view.project(INFLOW[:, 0], INFLOW[:, 1], INFLOW[:, 2] + 0.006)
-            ivis = view.visible(isx, isy, iz, iok, tol=0.02, slack=3) & (isx < (SB_X0 - 20) * S)
+            ivis = view.visible(isx, isy, iz, iok, tol=0.02, slack=3)
             for k_ in np.flatnonzero(ivis):
                 x_, y_ = float(isx[k_]), float(isy[k_])
                 pul = (t * 1.1 + 0.33 * k_) % 1.0
-                ring(img, x_, y_, (10 + 18 * pul) * S, 2.0 * S, (255, 210, 110), ga * (1 - pul) * 0.9)
-                disc(img, x_, y_, 9 * S, (10, 14, 24), ga * 0.6)
-                ring(img, x_, y_, 8.5 * S, 1.8 * S, (255, 255, 255), ga)
-                disc(img, x_, y_, 5 * S, (255, 200, 92), ga)
+                ring(img, x_, y_, (14 + 26 * pul) * S, 2.6 * S, (255, 210, 110), ga * (1 - pul) * 0.95)
+                disc(img, x_, y_, 13 * S, (10, 14, 24), ga * 0.7)
+                ring(img, x_, y_, 12.5 * S, 2.4 * S, (255, 255, 255), ga)
+                disc(img, x_, y_, 7.5 * S, (255, 200, 92), ga)
 
+        # ---- names on the map, centred above the highlighted area
+        la = ease(ramp(t, 0.3, 0.8)) * (1 - ease(ramp(t, 5.45, 5.85)))
+        if la > 0:
+            anc = self.label_anchor(view, cd["basin_outline"].astype(np.float64))
+            if anc:
+                y = max(anc[1] - 54, 190)
+                self.labels.append(("Tennessee River Basin", anc[0], y, "maplbl", (255, 255, 255), la))
+                ra = la * ease(ramp(t, 1.4, 1.9))
+                self.labels.append(("Red dots: Hydropower dam", anc[0], y + 36, "maplbl2", (255, 170, 160), ra))
+        ld = ease(ramp(t, 5.9, 6.4)) * (1 - ease(ramp(t, 10.9, 11.4)))
+        if ld > 0:
+            anc = self.label_anchor(view, cd["outline_c" if mode_catch else "outline_b"].astype(np.float64))
+            if anc:
+                self.labels.append(("Douglas Hydropower Reservoir", anc[0], max(anc[1] - 30, 190), "maplbl",
+                                    (255, 255, 255), ld))
         img = np.clip(img, 0, 255).astype(np.uint8)
         return self.overlay(img, t, th)
 
-    def render_3d(self, p, use_catch, t, us=0.0):
+    def render_3d(self, p, use_catch, t, us=0.0, basin=1.0):
         A_US.SetVisibility(us > 0.01)
         A_US.prop.opacity = us
-        A_BFULL.SetVisibility(not use_catch)
+        A_BFULL.prop.opacity = basin           # < 1 only in the CONUS opening, before the basin is highlighted
+        A_BFULL.SetVisibility(not use_catch and basin > 0.01)
         A_BHOLE.SetVisibility(use_catch)
         A_C.SetVisibility(use_catch)
         set_camera(p)
@@ -1300,28 +1324,28 @@ class Renderer:
         return img, view
 
     def overlay(self, img, t, th, intro=False):
-        pim = Image.fromarray(img).convert("RGBA")
+        """t: story time (panel); self.tv: video time (captions, legend, titles)."""
+        tv = self.tv
+        e_a = ease(ramp(tv, T_MOVE0, T_MOVE1))
+        arr = img.astype(np.float32)
+        shade = np.maximum(SHADE_TL, SHADE_TOP * e_a)
+        arr = arr * (1 - shade) + BG[:, None, :] * shade
+        pim = Image.fromarray(arr.clip(0, 255).astype(np.uint8)).convert("RGBA")
         ov = Image.new("RGBA", (SW * SS, SH * SS), (0, 0, 0, 0))
         d = ImageDraw.Draw(ov)
-        draw_sidebar_bg(d, 1.0)
-        d.text((CX0 * FS, 40 * FS), "HydroORBIT", font=F["brand"], fill=(255, 255, 255, 240))
-        d.text((CX0 * FS + d.textlength("HydroORBIT", font=F["brand"]) + 14 * FS, 49 * FS), "streamflow forecasting",
-               font=F["brand2"], fill=(170, 182, 200, 225))
-        if intro:
-            draw_caption(d, t, INTRO_CAPTIONS)
-            draw_legend(d, t, 1 - ease(ramp(t, 6.2, 6.9)), INTRO_LEGEND)
-        else:
-            draw_caption(d, t)
-            draw_legend(d, t, 1 - ease(ramp(t, 33.6, 34.4)))
+        draw_title(d, tv)
+        draw_map_labels(d, getattr(self, "labels", []))
+        draw_caption(d, tv)
+        draw_legend(d, tv)
         ov = ov.resize((SW, SH), Image.LANCZOS)
         pim.alpha_composite(ov)
-        pa = 0.0 if intro else ease(ramp(t, 11.4, 12.4))
+        pa = 0.0 if intro else ease(ramp(t, 11.4, 12.4)) * (1 - ease(ramp(t, 38.2, 39.0)))
         if pa > 0:
             panel = panel_layer(t, th, pa)
             off = int(40 * S * (1 - pa))
             pim.alpha_composite(panel, (int(PX * S) + off, int(PY * S)))
         arr = np.asarray(pim.convert("RGB"), np.float32)
-        fin = ease(ramp(self.tv, 0, 0.6)) * (1 - ease(ramp(self.tv, DUR - 0.6, DUR)))
+        fin = ease(ramp(tv, 0, 0.6)) * (1 - ease(ramp(tv, DUR - 0.6, DUR)))
         if fin < 1:
             arr = arr * fin + (BG[:, None, :] * VIG) * (1 - fin)
         return arr.astype(np.uint8)
@@ -1341,12 +1365,12 @@ if __name__ == "__main__":
         sys.exit()
     R = Renderer()
     if ARGS.stills:
-        (HERE / "stills").mkdir(exist_ok=True)
+        (HERE / "private" / "stills").mkdir(parents=True, exist_ok=True)     # frames show Vinh's forecasts: kept out of git
         for tt in sorted(float(v) for v in ARGS.stills.split(",")):
             t0 = time.time()
             im = R.frame(tt)
             print(f"t={tt:5.1f}  th={sim_hours(tt):6.1f} h  particles={R.parts.c.size:5d}  {time.time()-t0:.2f}s", flush=True)
-            Image.fromarray(im).save(HERE / "stills" / f"still_{tt:05.1f}.png")
+            Image.fromarray(im).save(HERE / "private" / "stills" / f"still_{tt:05.1f}.png")
         sys.exit()
     n = int(DUR * FPS)
     a, b = (0, n)

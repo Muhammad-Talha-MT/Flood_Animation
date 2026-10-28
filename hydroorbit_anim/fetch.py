@@ -13,14 +13,11 @@ import geopandas as gpd
 warnings.filterwarnings("ignore")
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--site", default="03451500", help="headwater gauge for the hydrograph")
+ap.add_argument("--site", default="03455000", help="gauge for the hydrograph (French Broad near Newport, TN)")
 ap.add_argument("--dam", default="Douglas Dam", help="NID name of the focus dam (zoom catchment outlet)")
-ap.add_argument("--inflow", default="03454500,03461500,03467609",
-                help="USGS gauges just upstream of the reservoir whose sum is the observed inflow "
-                     "(French Broad at Hot Springs, Pigeon at Newport, Nolichucky near Lowland)")
-ap.add_argument("--tag", default="2021mar", help="event tag used in output file names")
-ap.add_argument("--start", default="2021-03-19")
-ap.add_argument("--end", default="2021-04-03")
+ap.add_argument("--tag", default="2019feb", help="event tag used in output file names")
+ap.add_argument("--start", default="2019-02-15")
+ap.add_argument("--end", default="2019-03-02")
 a = ap.parse_args()
 
 import pygeohydro as gh
@@ -158,7 +155,10 @@ if p := step(f"gauge_{a.site}_{a.tag}_iv.csv"):
     q = gh.NWIS().get_streamflow(a.site, (a.start, a.end), freq="iv")   # m3/s, UTC
     q.to_csv(p)
 
-if p := step(f"mrms_prcp_{TAG_C}_{a.tag}.csv"):
+# MRMS gridded rain only exists from 2020-10-14; earlier events take their rain from Vinh's file (make_rain.py)
+if pd.Timestamp(a.start) < pd.Timestamp("2020-10-14"):
+    print("  skip MRMS (archive starts 2020-10-14)")
+elif p := step(f"mrms_prcp_{TAG_C}_{a.tag}.csv"):
     # Hourly NOAA MRMS MultiSensor QPE (Pass 2, radar + gauges, ~1 km) from the public AWS
     # archive, cropped to the catchment. (NLDAS-2 data rods were retired in 2025.)
     # Each file is the 1-h accumulation ending at its timestamp.
@@ -203,18 +203,19 @@ if p := step(f"mrms_prcp_{TAG_C}_{a.tag}.csv"):
     np.savez_compressed(D / f"mrms_grid_{TAG_C}_{a.tag}.npz", rain=grid, lat=lat, lon=lon,
                         t_start_ns=(hours - pd.Timedelta(hours=1)).as_unit("ns").asi8, mask=m)
     print(f"    MRMS basin-mean total {s.sum():.0f} mm, max {s.max():.1f} mm/h at {s.idxmax()}")
-# Reservoir inflow gauges: locations, event series (15 min) and the hourly record since WY2012
-# (common period of all three) for the flood thresholds
-INFLOW = a.inflow.split(",")
-if p := step("inflow_gauges.geojson"):
-    info = gh.NWIS().get_info({"site": ",".join(INFLOW)}).drop_duplicates("site_no")
+# Gauge for the hydrograph and the on-screen marker: USGS 03455000, French Broad near Newport, TN (the gauge
+# Vinh's AI and TVA forecasts are for). Hourly record for the flood levels is built from water years 2008-2025.
+if p := step(f"gauge_{a.site}.geojson"):
+    info = gh.NWIS().get_info({"site": a.site}).drop_duplicates("site_no")
     gpd.GeoDataFrame(info[["site_no", "station_nm"]], crs=4269,
                      geometry=gpd.points_from_xy(info.dec_long_va, info.dec_lat_va)).to_file(p, driver="GeoJSON")
-if p := step(f"inflow3_{a.tag}_iv.csv"):
-    gh.NWIS().get_streamflow(INFLOW, (a.start, a.end), freq="iv").to_csv(p)
-if p := step("inflow3_iv_hourly.csv"):
+if p := step(f"newport_iv_6h.csv"):
     out = []
-    for y in range(2012, 2026):
-        out.append(gh.NWIS().get_streamflow(INFLOW, (f"{y-1}-10-01", f"{y}-09-30"), freq="iv").resample("h").mean())
-    pd.concat(out).to_csv(p)
+    for y in range(2008, 2026):
+        try:
+            out.append(gh.NWIS().get_streamflow(a.site, (f"{y-1}-10-01", f"{y}-09-30"), freq="iv").iloc[:, 0]
+                       .resample("6h", label="right", closed="right").mean())
+        except Exception as e:
+            print("   no iv data for WY", y, str(e)[:60])
+    pd.concat(out).rename("q_m3s").to_csv(p)
 print("done")
